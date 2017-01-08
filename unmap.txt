@@ -1,0 +1,404 @@
+// demo.nes memory map, dissassembly, decompilation, and commenting
+
+
+// WRAM map
+$0000 irq_function
+$0002 rng_out    // Rng output
+$0003 rng_in     // Rng entropy pool
+$0004 rng_temp   // Rng() local
+$0005 joy1       // Joy1 this frame input (b7 b6 b5 b4 b3 b2 b1 b0)
+$0006 joy1_last  // Joy1 last frame input (a  b  st se u  d  l  r )
+$0007 joy1_fall  // Joy1 rising button edges
+$0008 joy1_rise  // Joy1 falling button edges
+$0009 joy2       // Joy2 this
+$000A joy2_last  // Joy2 last
+$000B joy2_fall  // Joy2 rising
+$000C joy2_rise  // Joy2 falling
+$000D start_room // Entrance coordinates, 0xF0 = Y bits, 0x0F = X bits
+$000E end_room   // Exit coordinates,     0xF0 = Y bits, 0x0F = X bits
+$000F draw_map   // Flag to draw map during nmi. 0x00 = no, 0x01 = yes
+$0010 map_room   // Map() local, map current room
+$0011 map_paths  // Map() local, map path index
+$0012 map_steps  // Map() local, map path step index
+// Page $01
+$0100 stack       [0x0100]
+// Page $02
+$0200 oam         [0x0100]
+$0200 Obj0
+$0204 Obj1
+// Page $04
+$0400 map         [0x0100] // [0x10][0x10]
+
+// VRAM map
+$0000 obj_pattern [0x1000]
+$1000 bg_pattern  [0x1000]
+$2000 name0       [0x03C0]
+$23C0 attribute0  [0x0040]
+$3F00 bg_palette  [0x0010]
+$3F10 obj_palette [0x0010]
+
+
+// PRG-ROM map
+$C000 Reset
+$C07B Nmi
+$C0C2 Map
+$C113 map_door
+$C117 map_move
+$C117 Draw
+$C1D6 Rng
+$C1FF Joy
+$E000 palette
+$FFFA vectors
+
+// CHR-ROM map
+$0000 obj_pattern
+$1000 bg_pattern
+
+
+
+// HEADER
+                     ; NES Header
+0000  4E 45 53 1A    ; "NES\EOF" (MS-DOS)
+0000  01             ; PRG-ROM == 1 * 16KB (Start address is at $C000)
+0000  01             ; CHR-ROM == 1 * 8KB
+0000  01 00          ; FLAGS: Mapper == NONE, HORIZONTAL MIRRORING
+0000  00             ; PRG-RAM == 0 * 8KB
+0000  00             ; Flags: NTSC
+0000  00             ; Pragma
+0000  00 00 00 00 00 ; Unused
+
+
+// PRG-ROM
+C000                        ; Reset :               ;
+C000  78        SEI         ;      SEI              ; Sei(); // Cpu interrupts = off
+C001  D8        CLD         ;      CLD              ; Cld(); // Cpu decimal mode = off
+C002  A2 40     LDX #$40    ;      LDX #$40         ; apuirq_r = 0x40; // Apu interrupts = off
+C004  8E 17 40  STX $4017   ;      STX apuirq_r     ;
+C007  A2 FF     LDX #$FF    ;      LDX #$FF         ; S = 0xFF; // Set stack to $01FF (grows down)
+C009  9A        TXS         ;      TXS              ;
+C00A  E8        INX         ;      INX              ;
+C00B  8E 00 20  STX $2000   ;      STX ppuctrl_r    ; ppuctrl_r = 0x00; // Nmi=off
+C00E  8E 01 20  STX $2001   ;      STX ppumask_r    ; ppumask_r = 0x00; // Background=off, Objects=off
+C011  8E 10 40  STX $4010   ;      STX apudmac_r    ; apudmac_r = 0x00; // Apu DMA channel=off
+C014  2C 02 20  BIT $2002   ;  - : BIT ppustatus_r  ; while( ~(ppustatus_r & 0x80) ); // Wait for vblank
+C017  10 FB     BPL #$FB    ;      BPL -            ; // Clear WRAM
+C019  A9 00     LDA #$00    ;  - : LDA #$00         ; X = 0x00;
+C01B  9D 00 00  STA $0000,X ;      STA $0000,X      ; do {
+C01E  9D 00 01  STA $0100,X ;      STA $0100,X      ;     $0100[X] = 0x00; // Stack
+C021  9D 00 03  STA $0300,X ;      STA $0300,X      ;     $0200[X] = 0xFE; // Oam (hide obj off screen in Y)
+C024  9D 00 04  STA $0400,X ;      STA $0400,X      ;     $0300[X] = 0x00; // -
+C027  9D 00 05  STA $0500,X ;      STA $0500,X      ;     $0400[X] = 0x00; // Map
+C02A  9D 00 06  STA $0600,X ;      STA $0600,X      ;     $0500[X] = 0x00; // -
+C02D  9D 00 07  STA $0700,X ;      STA $0700,X      ;     $0600[X] = 0x00; // -
+C030  A9 FE     LDA #$FE    ;      LDA #$FE         ;     $0700[X] = 0x00; // -
+C032  9D 00 02  STA $0200,X ;      STA $0200,X      ; }while(++X);
+C035  E8        INX         ;      INX              ;
+C036  D0 E1     BNE #$E1    ;      BNE -            ;
+C038  2C 02 20  BIT $2002   ;  - : BIT ppustatus_r  ; while( ~(ppustatus_r & 0x80) ); // Wait for vblank
+C03B  10 FB     BPL #$FB    ;      BPL -            ;
+C03D  AD 02 20  LDA $2002   ;      LDA ppustatus_r  ; ppustatus_r; // Reset vblank flag by reading it
+C040  A9 3F     LDA #$3F    ;      LDA #$3F         ; // Copy palette to vram
+C042  8D 06 20  STA $2006   ;      STA ppuaddr_r    ; ppuaddr_r = 0x3F00;
+C045  A9 00     LDA #$00    ;      LDA #$00         ;
+C047  8D 06 20  STA $2006   ;      STA ppuaddr_r    ;
+C04A  A2 00     LDX #$00    ;      LDX #$00         ; for(X = 0x00; X != 0x20; X++) ppudata_r = palette[X];
+C04C  BD 00 E0  LDA $E000,X ;  - : LDA palette,X    ;
+C04F  8D 07 20  STA $2007   ;      STA ppudata_r    ;
+C052  E8        INX         ;      INX              ;
+C053  E0 20     CPX #$20    ;      CPX #$20         ;
+C055  D0 F5     BNE #$F5    ;      BNE -            ; // Nmi=on, Obj=8x8, Obj=$0000, Bg=$1000, Name=$2000
+C057  A9 90     LDA #$90    ;      LDA #$90         ; ppuctrl_r = 0x90;
+C059  8D 00 20  STA $2000   ;      STA ppuctrl_r    ; // Obj=on, Bg=on, Obj col0=on, Bg col0=on, normal color
+C05C  A9 1E     LDA #$1E    ;      LDA #$1E         ; ppumask_r = 0x1E;
+C05E  8D 01 20  STA $2001   ;      STA ppumask_r    ;
+C061  A9 01     LDA #$01    ;      LDA #$01         ; draw_map = 0x01;
+C063  8D 0F 00  STA $000F   ;      STA draw_map     ;
+C065  A9 12     LDA #$12    ;      LDA #$12         ; rng_out = 0x12;
+C067  8D 02 00  STA $0002   ;      STA rng_out      ;
+C06A  A9 34     LDA #$34    ;      LDA #$34         ; rng_in = 0x34;
+C06C  8D 03 00  STA $0003   ;      STA rng_in       ;
+C070  A9 88     LDA #$88    ;      LDA #$88         ; start_room = 0x88;
+C072  8D 0D 00  STA $000D   ;      STA start_room   ;
+C075  8D 0E 00  STA $000E   ;      STA end_room     ; end_room = 0x88;
+C078  4C 78 C0  JMP $C078   ;  - : JMP -            ; for(;;); // Main loop (Just waits for vblanks)
+
+C07B                        ; Nmi :                 ; // Dma oam
+C07B  A9 00     LDA #$00    ;      LDA #$00         ; oamaddr_r = 0x00; // Destination oam ram
+C07D  8D 03 20  STA $2003   ;      STA oamaddr_r    ;
+C080  A9 02     LDA #$02    ;      LDA #$02         ; oamdma_r = 0x02; // Source wram page
+C082  8D 14 40  STA $4014   ;      STA oamdma_r     ; // Nmi=on, Obj=8x8, Obj=$0000, Bg=$1000, Name=$2000
+C085  A9 90     LDA #$90    ;      LDA #$90         ; ppuctrl_r = 0x90;
+C087  8D 00 20  STA $2000   ;      STA ppuctrl_r    ; // Obj=on, Bg=on, Obj col0=on, Bg col0=on, normal color
+C08A  A9 1E     LDA #$1E    ;      LDA #$1E         ; ppumask_r = 0x1E;
+C08C  8D 01 20  STA $2001   ;      STA ppumask_r    ; // Set bg scroll
+C08F  A9 00     LDA #$00    ;      LDA #$00         ; ppuscroll_r = 0x00; // X
+C091  8D 05 20  STA $2005   ;      STA ppuscroll_r  ;
+C094  8D 05 20  STA $2005   ;      STA ppuscroll_r  ; ppuscroll_r = 0x00; // Y
+C097  AD 0F 00  LDA $000F   ;      LDA draw_map     ; if(draw_map){
+C09A  C9 00     CMP #$00    ;      CMP #$00         ;
+C09C  F0 08     BEQ #$08    ;      BEQ +            ;
+C09E  20 1B C1  JSR $C11B   ;      JSR Draw         ;     Draw();
+C0A1  A9 00     LDA #$00    ;      LDA #$00         ;     draw_map = 0x00;
+C0A3  8D 0F 00  STA $000F   ;      STA draw_map     ; }
+C0A6  20 FF C1  JSR $C1FF   ;  + : JSR Joy          ; X = Joy();
+C0A9  AD 08 00  LDA $0008   ;      LDA joy1_rise    ; if( !(joy1_rise | joy2_rise) ){
+C0AC  0D 0C 00  ORA $000C   ;      ORA joy2_rise    ;
+C0AF  F0 10     BEQ #$10    ;      BEQ +            ;     // Clear map
+C0B1  A9 00     LDA #$00    ;      LDA #$00         ;     do{ map[X] = 0x00; }while(++X);
+C0B3  9D 00 04  STA $0400,X ;  - : STA map,X        ;
+C0B6  E8        INX         ;      INX              ;
+C0B7  D0 FA     BNE #$FA    ;      BNE -            ;
+C0B9  20 C2 C0  JSR $C0C2   ;      JSR Map          ;     Map();
+C0BC  A9 01     LDA #$01    ;      LDA #$01         ;     draw_map = 0x01;
+C0BE  8D 0F 00  STA $000F   ;      STA draw_map     ; }
+C0C1  40        RTI         ;  + : RTI              ; return;
+
+C0C2                        ; Map :                 ; // Random walk a few paths
+C0C2  A9 04     LDA #$04    ;      LDA #$04         ; for(map_paths = 0x04; map_paths; map_paths--){
+C0C4  8D 11 00  STA $0011   ;      STA map_paths    ;     map_room   = 0x88; // Center of map
+C0C7  A9 08     LDA #$08    ; -- : LDA #$08         ;     start_room = 0x88; // Center of map
+C0C9  8D 12 00  STA $0012   ;      STA map_steps    ;     for(map_steps = 0x08; map_steps; map_steps--){
+C0CC  A9 88     LDA #$88    ;      LDA #$88         ;
+C0CE  8D 10 00  STA $0010   ;      STA map_room     ;
+C0D1  8D 0D 00  STA $000D   ;      STA start_room   ;         // Get random direction
+C0D4  20 D6 C1  JSR $C1D6   ;  - : JSR Rng          ;         Rng();
+C0D7  AD 02 00  LDA $0002   ;      LDA rng_out      ;         Y = rng_out & 0x03;
+C0DA  29 03     AND #$03    ;      AND #$03         ;
+C0DC  A8        TAY         ;      TAY              ;         // Make door
+C0DD  AE 10 00  LDX $0010   ;      LDX map_room     ;         X = map_room;
+C0E0  B9 13 C1  LDA $C113,Y ;      LDA $C113,Y      ;         map[X] |= $C113[Y];
+C0E3  1D 00 04  ORA $0400,X ;      ORA map,X        ;
+C0E6  9D 00 04  STA $0400,X ;      STA map,X        ;         // Move to room
+C0E9  8A        TXA         ;      TXA              ;         map_room = X + $C117[Y];
+C0EA  18        CLC         ;      CLC              ;
+C0EB  79 17 C1  ADC $C117,Y ;      ADC $C117,Y      ;
+C0EE  8D 10 00  STA $0010   ;      STA map_room     ;         // Invert direction
+C0F1  AA        TAX         ;      TAX              ;         X = map_room;
+C0F2  98        TYA         ;      TYA              ;         Y ^= 0x02;
+C0F3  49 02     EOR #$02    ;      EOR #$02         ;
+C0F5  A8        TAY         ;      TAY              ;         // Make door
+C0F6  B9 13 C1  LDA $C113,Y ;      LDA $C113,Y      ;         map[X] |= $C113[Y];
+C0F9  1D 00 04  ORA $0400,X ;      ORA map,X        ;
+C0FC  9D 00 04  STA $0400,X ;      STA map,X        ;
+C0FF  20 D6 C1  JSR $C1D6   ;      JSR Rng          ;         Rng();
+C102  CE 12 00  DEC $0012   ;      DEC map_steps    ;     }
+C105  D0 CD     BNE #$CD    ;      BNE -            ;
+C107  CE 11 00  DEC $0011   ;      DEC map_paths    ;
+C10A  D0 BB     BNE #$BB    ;      BNE --           ; }
+C10C  AD 10 00  LDA $0010   ;      LDA map_room     ; end_room = map_room;
+C10F  8D 0E 00  STA $000E   ;      STA end_room     ;
+C112  60        RTS         ;      RTS              ; return;
+
+C113  01 02 04 08           ; map_door ; // Used to set doors on rooms (up, right, down, left). See CHR-ROM
+C117  F0 01 10 FF           ; map_move ; // Used to move between rooms (up, right ,down, left)
+
+C11B                        ; Draw :                ;
+C11B  A9 00     LDA #$00    ;      LDA #$00         ; ppuctrl_r = 0x00; // Nmi=off
+C11D  8D 00 20  STA $2000   ;      STA ppuctrl_r    ;
+C120  8D 01 20  STA $2001   ;      STA ppumask_r    ; ppumask_r = 0x00; // Obj=off, Bg=off
+C123  AD 02 20  LDA $2002   ;      LDA ppustatus_r  ; ppustatus_r; // Clear vblank flag by reading
+C126  A9 20     LDA #$20    ;      LDA #$20         ; // Draw map on name0
+C128  8D 06 20  STA $2006   ;      STA ppuaddr_r    ; ppuaddr_r = 0x2000;
+C12B  A9 00     LDA #$00    ;      LDA #$00         ;
+C12D  8D 06 20  STA $2006   ;      STA ppuaddr_r    ;
+C130  A9 FF     LDA #$FF    ;      LDA #$FF         ; // Draw top 0x08 border rows
+C132  A0 00     LDY #$00    ;      LDY #$00         ; Y = 0x00;
+C134  8D 07 20  STA $2007   ;  - : STA ppudata_r    ; do{ ppudata_r = 0xFF; }while(--Y);
+C137  88        DEY         ;      DEY              ;
+C138  D0 FA     BNE #$FA    ;      BNE -            ; // Draw central 0x10 map rows
+C13A  A2 00     LDX #$00    ;      LDX #$00         ; X = 0x00;
+C13C  A9 FF     LDA #$FF    ; -- : LDA #$FF         ; do{
+C13E  A0 08     LDY #$08    ;      LDY #$08         ;     Y = 0x08; // Left border
+C140  8D 07 20  STA $2007   ;  - : STA ppudata_r    ;     do{ ppudata_r = 0xFF; }while(--Y);
+C143  88        DEY         ;      DEY              ;
+C144  D0 FA     BNE #$FA    ;      BNE -            ;
+C146  A0 10     LDY #$10    ;      LDY #$10         ;     Y = 0x10; // Map
+C148  BD 00 04  LDA $0400,X ;  - : LDA map,X        ;     do{ ppudata_r = map[X++]; }while(--Y);
+C14B  8D 07 20  STA $2007   ;      STA ppudata_r    ;
+C14E  E8        INX         ;      INX              ;
+C14F  88        DEY         ;      DEY              ;
+C150  D0 F6     BNE #$F6    ;      BNE -            ;
+C152  A9 FF     LDA #$FF    ;      LDA #$FF         ;
+C154  A0 08     LDY #$08    ;      LDY #$08         ;     Y = 0x08; // Right border
+C156  8D 07 20  STA $2007   ;  - : STA ppudata_r    ;     do{ ppudata_r = 0xFF; }while(--Y);
+C159  88        DEY         ;      DEY              ;
+C15A  D0 FA     BNE #$FA    ;      BNE -            ;
+C15C  E0 00     CPX #$00    ;      CPX #$00         ; }while(X);
+C15E  D0 DC     BNE #$DC    ;      BNE --           ;
+C160  A9 FF     LDA #$FF    ;      LDA #$FF         ; // Draw bottom 0x08 border rows
+C162  A0 00     LDY #$00    ;      LDY #$00         ; Y = 0x00;
+C164  8D 07 20  STA $2007   ;  - : STA ppudata_r    ; do{ ppudata_r = 0xFF; }while(--Y);
+C167  88        DEY         ;      DEY              ;
+C168  D0 FA     BNE #$FA    ;      BNE -            ; // Set attribute table
+C16A  AD 02 20  LDA $2002   ;      LDA ppustatus_r  ; ppustatus_r; // Clear vblank flag
+C16D  A9 23     LDA #$23    ;      LDA #$23         ; ppuaddr_r = 0x23C0; // attribute0
+C16F  8D 06 20  STA $2006   ;      STA ppuaddr_r    ;
+C172  A9 C0     LDA #$C0    ;      LDA #$C0         ;
+C174  8D 06 20  STA $2006   ;      STA ppuaddr_r    ;
+C177  A2 00     LDX #$00    ;      LDX #$00         ; for(X = 0x00; X != 0x40; X++) ppudata_r = 0x00;
+C179  A9 00     LDA #$00    ;  - : LDA #$00         ;
+C17B  8D 07 20  STA $2007   ;      STA ppudata_r    ;
+C17E  E8        INX         ;      INX              ;
+C17F  E0 40     CPX #$40    ;      CPX #$40         ;
+C181  D0 F6     BNE #$F6    ;      BNE -            ; // Draw start room marker object
+C183  AD 0D 00  LDA $000D   ;      LDA start_room   ; oam[0x00].y = (start_room & 0xF0) / 2 + 0x3F;
+C186  29 F0     AND #$F0    ;      AND #$F0         ;
+C188  4A        LSR A       ;      LSR A            ;
+C189  18        CLC         ;      CLC              ;
+C18A  69 3F     ADC #$3F    ;      ADC #$3F         ;
+C18C  8D 00 02  STA $0200   ;      STA oam00_y      ;
+C18F  A9 10     LDA #$10    ;      LDA #$10         ; oam[0x00].t = 0x10; // Square room marker tile
+C191  8D 01 02  STA $0201   ;      STA oam00_t      ;
+C194  A9 00     LDA #$00    ;      LDA #$00         ; oam[0x00].a = 0x00; // Obj00 V=0,H=0,Priority=0,Palette=0
+C196  8D 02 02  STA $0202   ;      STA oam00_a      ;
+C199  AD 0D 00  LDA $000D   ;      LDA start_room   ; oam[0x00].x = (start_room & 0x0F) * 8 + 0x40;
+C19C  29 0F     AND #$0F    ;      AND #$0F         ;
+C19E  0A        ASL A       ;      ASL A            ;
+C19F  0A        ASL A       ;      ASL A            ;
+C1A0  0A        ASL A       ;      ASL A            ;
+C1A1  18        CLC         ;      CLC              ;
+C1A2  69 40     ADC #$40    ;      ADC #$40         ;
+C1A4  8D 03 02  STA $0203   ;      STA oam00_x      ; // Draw end room marker object
+C1A6  AD 0E 00  LDA $000E   ;      LDA end_room     ; oam[0x01].y = (end_room & 0xF0) / 2 + 0x3F;
+C1A9  29 F0     AND #$F0    ;      AND #$F0         ;
+C1AB  4A        LSR A       ;      LSR A            ;
+C1AC  18        CLC         ;      CLC              ;
+C1AD  69 3F     ADC #$3F    ;      ADC #$3F         ;
+C1B0  8D 04 02  STA $0204   ;      STA oam01_y      ;
+C1B3  A9 10     LDA #$10    ;      LDA #$10         ; oam[0x01].t = 0x10; // Square room marker tile
+C1B5  8D 05 02  STA $0205   ;      STA oam01_t      ;
+C1B8  A9 01     LDA #$01    ;      LDA #$01         ; oam[0x01].a = 0x01; // Obj01 V=0,H=0,Priority=0,Palette=1
+C1BA  8D 06 02  STA $0206   ;      STA oam01_a      ;
+C1BD  AD 0E 00  LDA $000E   ;      LDA end_room     ; oam[0x01].x = (end_room & 0x0F) * 8 + 0x40;
+C1C0  29 0F     AND #$0F    ;      AND #$0F         ;
+C1C2  0A        ASL A       ;      ASL A            ;
+C1C3  0A        ASL A       ;      ASL A            ;
+C1C4  0A        ASL A       ;      ASL A            ;
+C1C5  18        CLC         ;      CLC              ;
+C1C6  69 40     ADC #$40    ;      ADC #$40         ;
+C1C8  8D 07 02  STA $0207   ;      STA oam01_x      ; // Nmi=on, Obj=8x8, Bg=$1000, Obj=$0000, Name=$2000
+C1CB  A9 90     LDA #$90    ;      LDA #$90         ; ppuctrl_r = 0x90;
+C1CD  8D 00 20  STA $2000   ;      STA ppuctrl_r    ;
+C1D0  A9 1E     LDA #$1E    ;      LDA #$1E         ; // Obj=on, Bg=on, Obj col0=on, Bg col0=on, normal color
+C1D2  8D 01 20  STA $2001   ;      STA ppumask_r    ; ppumask_r = 0x1E;
+C1D5  60        RTS         ;      RTS              ; return;
+
+C1D6                        ; Rng :                 ; // Some xorshift that produces 1-bit per call. Pricey!
+C1D6  AE 03 00  LDX $0003   ;      LDX rng_in       ; rng_temp = rng_in;
+C1D9  8E 04 00  STX $0004   ;      STX rng_temp     ;
+C1DC  AD 04 00  LDA $0004   ;      LDA rng_temp     ; A = rng_temp;
+C1DF  4E 04 00  LSR $0004   ;      LSR rng_temp     ; A ^= rng_temp>>2;
+C1E2  4E 04 00  LSR $0004   ;      LSR rng_temp     ;
+C1E5  4D 04 00  EOR $0004   ;      EOR rng_temp     ;
+C1E8  4E 04 00  LSR $0004   ;      LSR rng_temp     ; A ^= rng_temp>>1;
+C1EB  4D 04 00  EOR $0004   ;      EOR rng_temp     ;
+C1EE  4E 04 00  LSR $0004   ;      LSR rng_temp     ; A ^= rng_temp>>2;
+C1F1  4E 04 00  LSR $0004   ;      LSR rng_temp     ;
+C1F4  4D 04 00  EOR $0004   ;      EOR rng_temp     ;
+C1F7  4A        LSR A       ;      LSR rng_temp     ; A >>= 1;
+C1F8  6E 02 00  ROR $0002   ;      ROR rng_out      ; rng_out |>= 1;
+C1FB  6E 03 00  ROR $0003   ;      ROR rng_in       ; rng_in  |>= 1;
+C1FE  60        RTS         ;      RTS              ; return;
+
+C1FF                        ; Joy :                 ;
+C1FF  AD 05 00  LDA $0005   ;      LDA joy1         ; joy1_last = joy1;
+C202  8D 06 00  STA $0006   ;      STA joy1_last    ;
+C205  AD 09 00  LDA $0009   ;      LDA joy2         ; joy2_last = joy2;
+C208  8D 0A 00  STA $000A   ;      STA joy2_last    ; // Latch controller
+C20B  A9 01     LDA #$01    ;      LDA #$01         ; joy1_r = 0x01;
+C20D  8D 16 40  STA $4016   ;      STA joy1_r       ;
+C210  A9 00     LDA #$00    ;      LDA #$00         ; joy1_r = 0x00;
+C212  8D 16 40  STA $4016   ;      STA joy1_r       ; // Read joy1
+C215  A2 08     LDX #$08    ;      LDX #$08         ; for(X = 0x08; X; X--){ // Serial read
+C217  AD 16 40  LDA $4016   ;  - : LDA joy1_r       ;     joy1_r >> 1; // Set carry
+C21A  4A        LSR A       ;      LSR A            ;
+C21B  2E 05 00  ROL $0005   ;      ROL joy1         ;     joy1 <|= 1; // Shift in carry
+C21E  CA        DEX         ;      DEX              ; }
+C21F  D0 F6     BNE #$F6    ;      BNE -            ; // Latch
+C221  A9 01     LDA #$01    ;      LDA #$01         ; joy1_r = 0x01;
+C223  8D 16 40  STA $4016   ;      STA joy1_r       ;
+C226  A9 00     LDA #$00    ;      LDA #$00         ; joy1_r = 0x00;
+C228  8D 16 40  STA $4016   ;      STA joy1_r       ; // Read joy2
+C22B  A2 08     LDX #$08    ;      LDX #$08         ; for(X = 0x08; X; X--){ // Serial read
+C22D  AD 17 40  LDA $4017   ;  - : LDA joy2_r       ;     joy2_r >> 1; // Set carry
+C230  4A        LSR A       ;      LSR A            ;
+C231  2E 09 00  ROL $0009   ;      ROL joy2         ;     joy2 <|= 1; // Shift in carry
+C234  CA        DEX         ;      DEX              ;
+C235  D0 F6     BNE #$F6    ;      BNE -            ; }
+C237  AD 05 00  LDA $0005   ;      LDA joy1         ; joy1_fall = ~joy1 & joy1_last;
+C23A  49 FF     EOR #$FF    ;      EOR #$FF         ;
+C23C  2D 06 00  AND $0006   ;      AND joy1_last    ;
+C23F  8D 07 00  STA $0007   ;      STA joy1_fall    ;
+C242  AD 06 00  LDA $0006   ;      LDA joy1_last    ; joy1_rise = ~joy1_last & joy1;
+C245  49 FF     EOR #$FF    ;      EOR #$FF         ;
+C247  2D 05 00  AND $0005   ;      AND joy1         ;
+C24A  8D 08 00  STA $0008   ;      STA joy1_rise    ;
+C24D  AD 09 00  LDA $0009   ;      LDA joy2         ; joy2_fall = ~joy2 & joy2_last;
+C250  49 FF     EOR #$FF    ;      EOR #$FF         ;
+C252  2D 0A 00  AND $000A   ;      AND joy2_last    ;
+C255  8D 0B 00  STA $000B   ;      STA joy2_fall    ;
+C258  AD 0A 00  LDA $000A   ;      LDA joy_last     ; joy2_rise = ~joy2_last & joy2;
+C25B  49 FF     EOR #$FF    ;      EOR #$FF         ;
+C25D  2D 09 00  AND $0009   ;      AND joy2         ;
+C260  8D 0C 00  STA $000C   ;      STA joy2_rise    ;
+C263  60        RTS         ;      RTS              ; return;
+
+C264-DFFF FF
+
+E000  palette:
+E000  0F 30 38 0C 0F 0F 0F 0F 0F 0F 0F 0F 0F 0F 0F 0F ; // bg_palette
+E010  0F 2A 0F 0F 0F 26 0F 0F 0F 0F 0F 0F 0F 0F 0F 0F ; // obj_palette
+
+E020-FFF9 FF
+
+FFFA  vectors :
+FFFA  7B C0   ; Nmi          ;
+FFFC  00 C0   ; Reset        ;
+FFFE  00 00   ; irq_function ;
+
+
+// CHR-ROM
+0000  obj_pattern :
+0000  7C C6 C6 C6 C6 7C 00 00 00 38 21 21 21 03 3E 00 ; text_0 ;
+0010  18 38 18 18 18 7E 00 00 00 04 04 04 04 00 3F 00 ; text_1 ;
+0020  7C C6 1E 78 E0 FE 00 00 00 38 61 07 1C 00 7F 00 ; text_2 ;
+0030  7E 08 3C 06 C6 7C 00 00 00 37 00 18 01 03 3E 00 ; text_3 ;
+0040  1C 3C 6C CC FE 0C 00 00 00 02 12 22 00 73 06 00 ; text_4 ;
+0050  FC C0 FC 06 C6 7C 00 00 00 3E 00 78 01 03 3E 00 ; text_5 ;
+0060  7C C0 FC C6 C6 7C 00 00 00 3E 00 38 21 03 3E 00 ; text_6 ;
+0070  FE C6 0C 18 30 30 00 00 00 39 63 06 0C 08 18 00 ; text_7 ;
+0080  7C C6 7C C6 C6 7C 00 00 00 38 03 38 21 03 3E 00 ; text_8 ;
+0090  7C C6 C6 7E 06 7C 00 00 00 38 21 01 39 03 3E 00 ; text_9 ;
+00A0  38 6C C6 C6 FE C6 C6 00 00 10 30 21 01 39 21 63 ; text_A ;
+00B0  FC C6 C6 FC C6 C6 FC 00 00 38 21 03 38 21 03 7E ; text_B ;
+00C0  3C 66 C0 C0 C0 66 3C 00 00 18 33 20 20 00 03 1E ; text_C ;
+00D0  F8 CC C6 C6 C6 CC F8 00 00 30 20 21 21 23 06 7C ; text_D ;
+00E0  FE C0 C0 FC C0 C0 FE 00 00 3F 20 00 3E 20 00 7F ; text_E ;
+00F0  FE C0 C0 FC C0 C0 C0 00 00 3F 20 00 3E 20 20 60 ; text_F ;
+0100  00 7E 7E 7E 7E 7E 7E 00 00 00 00 00 00 00 00 00 ; square ; // Room marker
+0110-0FFF 00
+
+1000  bg_pattern :
+1000  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ; room_blank;
+1010  18 00 00 00 00 00 00 00 00 7E 7E 7E 7E 7E 7E 00 ; room_xxxu ; // Terminal room
+1020  00 00 00 01 01 00 00 00 00 7E 7E 7E 7E 7E 7E 00 ; room_xxrx ; // Terminal room
+1030  18 7E 7E 7F 7F 7E 7E 00 00 00 00 00 00 00 00 00 ; room_xxru ;
+1040  00 00 00 00 00 00 00 18 00 7E 7E 7E 7E 7E 7E 00 ; room_xdxx ; // Terminal room
+1050  18 7E 7E 7E 7E 7E 7E 18 00 00 00 00 00 00 00 00 ; room_xdxu ;
+1060  00 7E 7E 7F 7F 7E 7E 18 00 00 00 00 00 00 00 00 ; room_xdrx ;
+1070  18 7E 7E 7F 7F 7E 7E 18 00 00 00 00 00 00 00 00 ; room_xdru ;
+1080  00 00 00 80 80 00 00 00 00 7E 7E 7E 7E 7E 7E 00 ; room_lxxx ; // Terminal room
+1090  18 7E 7E FE FE 7E 7E 00 00 00 00 00 00 00 00 00 ; room_lxxu ;
+10A0  00 7E 7E FF FF 7E 7E 00 00 00 00 00 00 00 00 00 ; room_lxrx ;
+10B0  18 7E 7E FF FF 7E 7E 00 00 00 00 00 00 00 00 00 ; room_lxru ;
+10C0  00 7E 7E FE FE 7E 7E 18 00 00 00 00 00 00 00 00 ; room_ldxx ;
+10D0  18 7E 7E FE FE 7E 7E 18 00 00 00 00 00 00 00 00 ; room_ldxu ;
+10E0  00 7E 7E FF FF 7E 7E 18 00 00 00 00 00 00 00 00 ; room_ldrx ;
+10F0  18 7E 7E FF FF 7E 7E 18 00 00 00 00 00 00 00 00 ; room_ldru ;
+1100-1FEF 00
+1FF0  3E 1F 8F C7 E3 F1 F8 7C 3E 1F 8F C7 E3 F1 F8 7C ; stripe     ; // Used for border
+
+
+// PROLLY SOME FILE FORMAT FOOTER BULLSHIT OR SOMETHIN
+0000 0A btw fu op
+
