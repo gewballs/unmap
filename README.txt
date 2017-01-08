@@ -1,4 +1,4 @@
-# nes_unmap
+# unmap
 ![alt tag](https://raw.githubusercontent.com/gewballs/unmap/master/unmap.png)
 
 NES UNMAP
